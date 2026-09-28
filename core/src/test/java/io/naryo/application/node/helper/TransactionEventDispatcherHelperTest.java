@@ -192,7 +192,7 @@ class TransactionEventDispatcherHelperTest {
                 "1409749",
                 null,
                 null,
-                1409749,
+                1409749L,
                 ENTITY_ID,
                 List.of(),
                 "",
