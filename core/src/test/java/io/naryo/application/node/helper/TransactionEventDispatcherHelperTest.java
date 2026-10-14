@@ -14,11 +14,13 @@ import io.naryo.domain.common.NonNegativeBlockNumber;
 import io.naryo.domain.common.TransactionStatus;
 import io.naryo.domain.event.block.BlockEvent;
 import io.naryo.domain.event.transaction.TransactionEvent;
+import io.naryo.domain.event.transaction.eth.EthTransactionEvent;
 import io.naryo.domain.event.transaction.hedera.HederaTransactionEvent;
 import io.naryo.domain.filter.transaction.IdentifierType;
 import io.naryo.domain.filter.transaction.TransactionFilter;
 import io.naryo.domain.filter.transaction.TransactionFilterBuilder;
 import io.naryo.domain.node.Node;
+import io.naryo.domain.node.eth.pub.PublicEthereumNodeBuilder;
 import io.naryo.domain.node.hedera.HederaNodeBuilder;
 import io.naryo.domain.node.subscription.BlockSubscriptionConfigurationBuilder;
 import io.naryo.infrastructure.node.interactor.hedera.HederaMirrorNodeBlockInteractor;
@@ -41,6 +43,8 @@ class TransactionEventDispatcherHelperTest {
     private static final BigInteger BLOCK_NUMBER = BigInteger.valueOf(40928000);
     private static final BigInteger CONFIRMATION_BLOCKS = BigInteger.ONE;
     private static final String ENTITY_ID = "0.0.7132200";
+    private static final String ETH_HASH =
+            "0x5e2f6b1a0f3c4d6e8a9b7c1d2e3f405162738495a6b7c8d9e0f1a2b3c4d5e6f7";
 
     @Mock private Dispatcher dispatcher;
     @Mock private BlockInteractor blockInteractor;
@@ -161,6 +165,51 @@ class TransactionEventDispatcherHelperTest {
         assertEquals(1, addedTriggers.size());
     }
 
+    @Test
+    void execute_successfulEthereumTransaction_isConfirmedAfterConfirmationBlocks() {
+        Node ethereumNode = ethereumNode();
+        EthTransactionEvent event = ethEvent(ethereumNode, TransactionStatus.CONFIRMED);
+
+        helper.execute(ethereumNode, ethFilter(ethereumNode, DEFAULT_STATUSES), event);
+        addedTriggers.forEach(this::reachConfirmationBlock);
+
+        assertEquals(
+                List.of(TransactionStatus.UNCONFIRMED, TransactionStatus.CONFIRMED),
+                dispatchedStatuses);
+        assertEquals(1, addedTriggers.size());
+    }
+
+    @Test
+    void execute_failedEthereumTransaction_dispatchesItOnceAsFailedWithRevertReason()
+            throws Exception {
+        Node ethereumNode = ethereumNode();
+        EthTransactionEvent event = ethEvent(ethereumNode, TransactionStatus.FAILED);
+        when(blockInteractor.getRevertReason(ETH_HASH))
+                .thenReturn("Ownable: caller is not the owner");
+
+        helper.execute(ethereumNode, ethFilter(ethereumNode, DEFAULT_STATUSES), event);
+
+        assertEquals(List.of(TransactionStatus.FAILED), dispatchedStatuses);
+        assertEquals("Ownable: caller is not the owner", event.getRevertReason());
+        verify(dispatcher, never()).addTrigger(any());
+    }
+
+    @Test
+    void execute_failedEthereumTransactionWithFilterWithoutFailed_isNotDispatched() {
+        Node ethereumNode = ethereumNode();
+        EthTransactionEvent event = ethEvent(ethereumNode, TransactionStatus.FAILED);
+
+        helper.execute(
+                ethereumNode,
+                ethFilter(
+                        ethereumNode,
+                        Set.of(TransactionStatus.CONFIRMED, TransactionStatus.UNCONFIRMED)),
+                event);
+
+        assertEquals(List.of(), dispatchedStatuses);
+        verify(dispatcher, never()).addTrigger(any());
+    }
+
     private void reachConfirmationBlock(Trigger<?> trigger) {
         BlockEvent confirmationBlock = mock(BlockEvent.class);
         when(confirmationBlock.getNumber())
@@ -178,6 +227,42 @@ class TransactionEventDispatcherHelperTest {
                 .withValue(ENTITY_ID)
                 .withStatuses(statuses)
                 .build();
+    }
+
+    private Node ethereumNode() {
+        return new PublicEthereumNodeBuilder()
+                .withSubscriptionConfiguration(
+                        new BlockSubscriptionConfigurationBuilder()
+                                .withConfirmationBlocks(
+                                        new NonNegativeBlockNumber(CONFIRMATION_BLOCKS))
+                                .build())
+                .build();
+    }
+
+    private TransactionFilter ethFilter(Node ethereumNode, Set<TransactionStatus> statuses) {
+        return new TransactionFilterBuilder()
+                .withNodeId(ethereumNode.getId())
+                .withIdentifierType(IdentifierType.HASH)
+                .withValue(ETH_HASH)
+                .withStatuses(statuses)
+                .build();
+    }
+
+    private EthTransactionEvent ethEvent(Node ethereumNode, TransactionStatus status) {
+        return new EthTransactionEvent(
+                ethereumNode.getId(),
+                ETH_HASH,
+                status,
+                new NonNegativeBlockNumber(BLOCK_NUMBER),
+                BigInteger.valueOf(1790262037),
+                "0x8ba1f109551bd432803012645ac136ddd64dba72",
+                "0x5fbdb2315678afecb367f032d93f642f64180aa3",
+                "0",
+                "0x9c1d2e3f405162738495a6b7c8d9e0f1a2b3c4d5e6f75e2f6b1a0f3c4d6e8a9b",
+                new NonNegativeBlockNumber(BigInteger.ZERO),
+                BigInteger.ZERO,
+                "0x",
+                "");
     }
 
     private HederaTransactionEvent hederaEvent(TransactionStatus status, TransactionName name) {

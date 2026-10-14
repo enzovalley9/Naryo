@@ -50,11 +50,6 @@ public final class TransactionEventDispatcherHelper {
         }
 
         // TODO: Decouple this to be protocol-agnostic
-        if (transactionEvent instanceof EthTransactionEvent) {
-            return;
-        }
-
-        // TODO: Decouple this to be protocol-agnostic
         if (transactionEvent instanceof HederaTransactionEvent hederaTransactionEvent) {
             executeHederaTransactionEvent(filter, hederaTransactionEvent);
         }
