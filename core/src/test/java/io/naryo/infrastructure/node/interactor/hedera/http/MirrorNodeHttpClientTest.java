@@ -10,6 +10,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.ObjectReader;
 import io.naryo.application.node.interactor.block.dto.hedera.HederaTransaction;
 import io.naryo.application.node.interactor.block.dto.hedera.TransactionName;
+import io.naryo.infrastructure.node.interactor.hedera.exception.MirrorNodeUnavailableException;
+import io.naryo.infrastructure.node.interactor.hedera.exception.UnexpectedResponseException;
 import io.naryo.infrastructure.node.interactor.hedera.map.TransactionConverter;
 import io.naryo.infrastructure.node.interactor.hedera.response.ContractResultListResponseModel;
 import io.naryo.infrastructure.node.interactor.hedera.response.ContractResultResponseModel;
@@ -19,6 +21,8 @@ import okhttp3.*;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
@@ -137,6 +141,35 @@ class MirrorNodeHttpClientTest {
         doReturn("response").when(reader).readValue(anyString());
 
         assertNotNull(client.get(url, typeRef));
+    }
+
+    @ParameterizedTest
+    @ValueSource(ints = {429, 500, 502, 503, 504})
+    void get_throwsMirrorNodeUnavailableOnRateLimitAndServerErrors(int code) throws IOException {
+        MirrorNodeHttpClient client = clientRespondingWith(code);
+
+        assertThrows(
+                MirrorNodeUnavailableException.class,
+                () -> client.get(HttpUrl.parse("http://localhost/test"), new TypeReference<>() {}));
+    }
+
+    @ParameterizedTest
+    @ValueSource(ints = {301, 418})
+    void get_throwsUnexpectedResponseOnAnUnlistedStatus(int code) throws IOException {
+        MirrorNodeHttpClient client = clientRespondingWith(code);
+
+        assertThrows(
+                UnexpectedResponseException.class,
+                () -> client.get(HttpUrl.parse("http://localhost/test"), new TypeReference<>() {}));
+    }
+
+    private MirrorNodeHttpClient clientRespondingWith(int code) throws IOException {
+        Call call = mock();
+        Response response = mock();
+        doReturn(call).when(httpClient).newCall(any());
+        doReturn(response).when(call).execute();
+        doReturn(code).when(response).code();
+        return new MirrorNodeHttpClient(this.httpClient, this.mapper, "http://localhost", Map.of());
     }
 
     /**

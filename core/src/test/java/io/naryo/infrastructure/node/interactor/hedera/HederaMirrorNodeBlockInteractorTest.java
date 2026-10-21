@@ -17,6 +17,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import io.naryo.application.node.interactor.block.dto.Block;
 import io.naryo.application.node.interactor.block.dto.TransactionReceipt;
 import io.naryo.infrastructure.node.interactor.hedera.exception.EmptyResponseException;
+import io.naryo.infrastructure.node.interactor.hedera.exception.MirrorNodeUnavailableException;
 import io.naryo.infrastructure.node.interactor.hedera.exception.UnexpectedResponseException;
 import io.naryo.infrastructure.node.interactor.hedera.http.MirrorNodeHttpClient;
 import io.naryo.infrastructure.node.interactor.hedera.map.BlockConverter;
@@ -184,6 +185,56 @@ class HederaMirrorNodeBlockInteractorTest {
                         .blockingGet();
 
         assertEquals(List.of(BigInteger.ZERO, BigInteger.ONE), numbers);
+    }
+
+    @Test
+    void replayPastAndFutureBlocks_resumesFromTheMissedBlockAfterAMirrorNodeOutage()
+            throws IOException {
+        AtomicInteger blockRequests = new AtomicInteger(0);
+        doAnswer(
+                        invocation -> {
+                            TypeReference<?> typeRef = invocation.getArgument(1);
+                            if (typeRef.getType()
+                                    == new TypeReference<BlockResponseModel>() {}.getType()) {
+                                int request = blockRequests.getAndIncrement();
+                                if (request == 0) {
+                                    return createFakeBlock(0);
+                                }
+                                if (request <= 6) {
+                                    throw new MirrorNodeUnavailableException("502 Bad Gateway");
+                                }
+                                if (request == 7) {
+                                    throw new IOException("Connection reset");
+                                }
+                                return createFakeBlock(request - 7);
+                            }
+                            if (typeRef.getType()
+                                    == new TypeReference<
+                                            ContractResultListResponseModel>() {}.getType()) {
+                                return new ContractResultListResponseModel(
+                                        new ArrayList<>(), Map.of());
+                            }
+                            if (typeRef.getType()
+                                    == new TypeReference<
+                                            TransactionListResponseModel>() {}.getType()) {
+                                return new TransactionListResponseModel(
+                                        new ArrayList<>(), Map.of());
+                            }
+                            return null;
+                        })
+                .when(client)
+                .get(any(), any());
+
+        List<BigInteger> numbers =
+                interactor
+                        .replayPastAndFutureBlocks(BigInteger.ZERO)
+                        .take(3)
+                        .map(Block::number)
+                        .timeout(10, TimeUnit.SECONDS)
+                        .toList()
+                        .blockingGet();
+
+        assertEquals(List.of(BigInteger.ZERO, BigInteger.ONE, BigInteger.TWO), numbers);
     }
 
     @Test
